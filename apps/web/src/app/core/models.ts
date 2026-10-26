@@ -14,6 +14,7 @@ export type AppointmentStatus = 'Requested' | 'Held' | 'Confirmed' | 'Cancelled'
 export interface Appointment {
   id: string;
   sessionCode: string;
+  ownerId: string;
   reference: string;
   slots: number;
   feeCents: number;
@@ -30,4 +31,16 @@ export interface LogEntry {
   type: string;
   module: string;
   occurredAt: string;
+}
+
+export interface UserInfo {
+  id: string;
+  email: string;
+  roles: string[];
+}
+
+export interface AuthResponse {
+  accessToken: string;
+  expiresAt: string;
+  user: UserInfo;
 }

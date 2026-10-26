@@ -1,9 +1,10 @@
 import { test, expect, Page } from '@playwright/test';
+import { ADMIN, signIn } from './support';
 
 const run = () => Date.now().toString(36).toUpperCase() + Math.floor(Math.random() * 1000);
 
 async function openAccount(page: Page, code: string, capacity: number, shown: string) {
-  await page.goto('/');
+  await signIn(page, ADMIN);
   await page.getByLabel('Session code').fill(code);
   await page.getByLabel('Total slots').fill(String(capacity));
   await page.getByRole('button', { name: 'Open session' }).click();
@@ -29,11 +30,11 @@ test('the API refuses bad input and the page says why', async ({ page }) => {
   await submit(page, '   ', 1);
   await expect(page.getByRole('alert')).toContainText(/reference is required/i);
 
-  await submit(page, `PT-${id}`, 1);
+  await submit(page, `PT-${id}`, 2);
   await expect(row(page, `PT-${id}`).getByTestId('status')).toHaveText('Confirmed', {
     timeout: 20_000,
   });
-  await submit(page, `PT-${id}`, 1);
+  await submit(page, `PT-${id}`, 2);
   await expect(page.getByRole('alert')).toContainText('already');
   await expect(page.locator('tbody tr[data-reference]')).toHaveCount(1);
 });

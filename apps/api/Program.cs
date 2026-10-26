@@ -1,59 +1,76 @@
-using Clinic.Api.Data;
-using Clinic.Api.Messaging;
-using Clinic.Api.Middleware;
-using Clinic.Api.Modules.Appointments;
-using Clinic.Api.Modules.Scheduling;
-using Clinic.Api.Modules.Referrals;
-using Microsoft.EntityFrameworkCore;
+using Clinic.Appointments;
+using Clinic.Scheduling;
+using Clinic.Referrals;
+using Clinic.Identity;
+using Clinic.Shared;
+using Clinic.Shared.Auth;
+using Clinic.Shared.Http;
+using Clinic.Shared.Messaging;
+using Microsoft.AspNetCore.Diagnostics.HealthChecks;
+using Microsoft.AspNetCore.HttpOverrides;
 using Scalar.AspNetCore;
 
 var builder = WebApplication.CreateBuilder(args);
+var config = builder.Configuration;
 
-builder.Services.AddControllers().AddJsonOptions(o => o.JsonSerializerOptions.PropertyNameCaseInsensitive = true);
+if (config.GetValue("Logging:Json", false))
+    builder.Logging.AddJsonConsole(o =>
+    {
+        o.IncludeScopes = true;
+        o.UseUtcTimestamp = true;
+    });
+
+builder.Services.AddControllers()
+    .AddJsonOptions(o => o.JsonSerializerOptions.PropertyNameCaseInsensitive = true)
+    .AddApplicationPart(typeof(IdentityModule).Assembly)
+    .AddApplicationPart(typeof(AppointmentsModule).Assembly)
+    .AddApplicationPart(typeof(SchedulingModule).Assembly)
+    .AddApplicationPart(typeof(ReferralsModule).Assembly);
 builder.Services.AddProblemDetails();
 builder.Services.AddOpenApi();
+builder.Services.AddClinicAuthorization();
 
-var connectionString = builder.Configuration.GetConnectionString("Clinic")
-    ?? throw new InvalidOperationException("Connection string 'Clinic' is not configured.");
-builder.Services.AddDbContext<ClinicDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddIdentityModule(config);
+var messaging = builder.Services.AddMessaging(config);
+builder.Services.AddAppointmentsModule(config, messaging);
+builder.Services.AddSchedulingModule(config, messaging);
+builder.Services.AddReferralsModule(config, messaging);
+messaging.Start();
 
-builder.Services.Configure<RabbitOptions>(builder.Configuration.GetSection("RabbitMq"));
-builder.Services.Configure<KafkaOptions>(builder.Configuration.GetSection("Kafka"));
-builder.Services.Configure<AppointmentOptions>(builder.Configuration.GetSection("Appointments"));
-builder.Services.AddSingleton<RabbitConnection>();
-builder.Services.AddSingleton<KafkaLog>();
-
-builder.Services.AddScoped<AppointmentService>();
-builder.Services.AddScoped<SchedulingHandler>();
-builder.Services.AddScoped<ReferralsHandler>();
-builder.Services.AddScoped<AppointmentsHandler>();
-
-builder.Services.AddHostedService<OutboxRelay>();
-builder.Services.AddHostedService(sp => new ModuleConsumer<SchedulingHandler>(
-    sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<RabbitConnection>(),
-    new ConsumerSpec(Topology.SchedulingQueue, [Topology.ReserveKey, Topology.ReleaseKey], Prefetch: 1),
-    sp.GetRequiredService<ILogger<ModuleConsumer<SchedulingHandler>>>()));
-builder.Services.AddHostedService(sp => new ModuleConsumer<ReferralsHandler>(
-    sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<RabbitConnection>(),
-    new ConsumerSpec(Topology.ReferralsQueue, [Topology.HeldKey], Prefetch: 4),
-    sp.GetRequiredService<ILogger<ModuleConsumer<ReferralsHandler>>>()));
-builder.Services.AddHostedService(sp => new ModuleConsumer<AppointmentsHandler>(
-    sp.GetRequiredService<IServiceScopeFactory>(), sp.GetRequiredService<RabbitConnection>(),
-    new ConsumerSpec(Topology.AppointmentsQueue,
-        [Topology.HeldKey, Topology.ShortKey, Topology.IssuedKey, Topology.RejectedKey, Topology.ReleasedKey], Prefetch: 4),
-    sp.GetRequiredService<ILogger<ModuleConsumer<AppointmentsHandler>>>()));
+if (config.GetValue("ForwardedHeaders:Enabled", false))
+    builder.Services.Configure<ForwardedHeadersOptions>(o =>
+    {
+        // Behind the nginx container the real client address arrives in X-Forwarded-For. Trusting every proxy is only safe
+        // when the API is reachable through the proxy alone; restrict KnownNetworks to the proxy's network in production.
+        o.ForwardedHeaders = ForwardedHeaders.XForwardedFor | ForwardedHeaders.XForwardedProto;
+        o.KnownIPNetworks.Clear();
+        o.KnownProxies.Clear();
+    });
 
 var app = builder.Build();
 
-app.UseMiddleware<ExceptionHandler>();
-app.MapControllers();
-app.MapOpenApi();
-app.MapScalarApiReference();
-app.MapGet("/api/health", () => Results.Text("Healthy"));
+if (config.GetValue("ForwardedHeaders:Enabled", false))
+    app.UseForwardedHeaders();
+app.UseMiddleware<CorrelationIdMiddleware>();
+app.UseMiddleware<SecurityHeadersMiddleware>();
+app.UseMiddleware<ExceptionMiddleware>();
+app.UseStatusCodePages();
+app.UseRateLimiter();
+app.UseAuthentication();
+app.UseAuthorization();
 
-using (var scope = app.Services.CreateScope())
+app.MapControllers();
+app.MapGet("/api/health", () => Results.Text("Healthy")).AllowAnonymous();
+app.MapHealthChecks("/api/health/ready", new HealthCheckOptions { Predicate = r => r.Tags.Contains("ready") }).AllowAnonymous();
+if (config.GetValue("Docs:Public", false))
 {
-    await scope.ServiceProvider.GetRequiredService<ClinicDbContext>().Database.MigrateAsync();
+    app.MapOpenApi().AllowAnonymous();
+    app.MapScalarApiReference().AllowAnonymous();
 }
 
+foreach (var migrator in app.Services.GetServices<IModuleMigrator>().OrderBy(m => m.Order))
+    await migrator.MigrateAsync(app.Services, CancellationToken.None);
+
 app.Run();
+
+public partial class Program;
