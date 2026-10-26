@@ -6,6 +6,10 @@ One ASP.NET Core process, one Postgres database. An HTTP write saves the appoint
 
 > The Compose network is local and unauthenticated. There is no login, no token and no cookie. Do not publish these ports; Compose binds all of them to `127.0.0.1`.
 
+![The clinic UI after a few bookings: one confirmed, one short, one poison-rejected, one cancellation with its referral letter kept](docs/screenshot.png)
+
+*The UI reads everything from the API. Shown: one appointment confirmed, one short, one rejected for the poison token, and one cancellation that gave the slot back and kept its referral letter.*
+
 ## Appointment statuses
 
 ```mermaid
@@ -128,6 +132,63 @@ This repository runs on Compose. Nothing in it calls a cloud account.
 | Kafka 3.8 | Event Hubs |
 | RabbitMQ 3.13 | Service Bus queue with its dead-letter sub-queue |
 | The API and the web app | Container Apps |
+
+## API
+
+All routes are unauthenticated JSON. Interactive docs are at `http://127.0.0.1:5211/scalar/v1` (OpenAPI at `/openapi/v1.json`); the web port proxies `/api/`, `/scalar/` and `/openapi/` too.
+
+| Method and path | What it does | Responses |
+| --- | --- | --- |
+| `GET /api/health` | Liveness. | `200 Healthy` |
+| `POST /api/sessions` | Opens a session with its starting count. | `201`, `400` invalid, `409` code exists |
+| `GET /api/sessions` | Lists sessions. | `200` |
+| `GET /api/sessions/{code}` | One session with the live remaining count. | `200`, `404` |
+| `POST /api/appointments` | Accepts a appointment (1 to 4 slots) and starts the saga. | `202` Requested, `400` invalid, `404` unknown session, `409` duplicate reference |
+| `GET /api/appointments?sessionCode=` | Lists the latest 100 appointments, optionally for one session. | `200` |
+| `GET /api/appointments/{id}` | One appointment and its status. | `200`, `404` |
+| `POST /api/appointments/{id}/cancellation` | Moves a held or confirmed appointment to its cancellation status and gives the slot back. The referral letter is not touched. | `202`, `404`, `409` wrong status |
+| `GET /api/appointments/{id}/events` | The Kafka event log for one appointment, read from the start of the topic. | `200` |
+| `GET /api/letters/{appointmentId}` | The referral letter row. | `200`, `404` until the step has run |
+
+Errors come back as `application/problem+json` with a `title`.
+
+## Configuration
+
+Compose sets these on the API container. Defaults in `apps/api/appsettings.json` point at the published host ports, so `nx serve api` works against `docker compose up -d --wait db kafka rabbitmq`.
+
+| Setting | Compose value | Meaning |
+| --- | --- | --- |
+| `ConnectionStrings__Clinic` | `Host=db;Port=5432;Database=clinic;Username=clinic;Password=clinic` | The one Postgres database. Migrations run on startup. |
+| `RabbitMq__Host` / `__Port` / `__User` / `__Password` | `rabbitmq` / `5672` / `platform` / `platform` | Work queue. Virtual host `/`. |
+| `Kafka__BootstrapServers` | `kafka:9092` | Event log. |
+| `Appointments__FinalMarkDelayMs` | `1500` | Milliseconds the final mark waits. A latency knob so the smoke can land a cancellation inside the window. `0` outside Compose. |
+| `CLINIC_TEST_DB` (tests only) | | Postgres connection for `dotnet test`. Defaults to `localhost:5471`, database `clinic_test`. CI points it at its service container. |
+
+## Look inside and fix things
+
+```bash
+docker compose ps                      # five services, all healthy
+docker compose logs -f api             # relay, consumers, poison and retry lines
+docker compose exec db psql -U clinic -d clinic -c 'select "RoutingKey","SentAt" from "OutboxMessages" order by "Id" desc limit 10'
+open http://127.0.0.1:15701        # RabbitMQ management, platform / platform
+```
+
+- **Dead-lettered messages** sit in `referrals.work.dlq`. Nothing replays them; inspect them in the management UI. Retries wait in `<queue>.retry` for 2 seconds.
+- **A port is already in use**: `lsof -nP -i :5211` shows who holds it. Compose publishes only on `127.0.0.1`.
+- **`dotnet test` cannot connect**: start Postgres first with `docker compose up -d --wait db`.
+- **The smoke cannot reach the API**: run `docker compose up --build --wait` first; override the target with `API=... RABBIT=... ./scripts/smoke.sh`.
+- **Start clean**: `docker compose down -v` drops Postgres, Kafka and RabbitMQ data. Plain `down` keeps them, and the smoke is safe on kept data because every code carries a run id.
+- **The Kafka log looks empty right after a booking**: the relay publishes within a second or so; reload the event log.
+
+## Known limits
+
+- It is unauthenticated on purpose. Anything that can reach the API can read and write everything.
+- Delivery is at-least-once, not exactly-once. The inbox makes repeats harmless for the saga; the Kafka log can hold a duplicate event after a relay crash.
+- One broker, one partition, replication factor 1, one API instance. The relay does not coordinate across instances (the inbox would absorb the duplicates, but the outbox is never trimmed).
+- `GET .../events` scans the whole topic for each call. Fine here, not something to expose at scale.
+- Lists are capped at 100 rows and not paginated.
+- Dead-lettered messages are not replayed automatically.
+- The browser spec and the compose smoke run on a developer machine; CI does not run them.
 
 ## Layout
 
