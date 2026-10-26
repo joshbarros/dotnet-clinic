@@ -207,3 +207,4 @@ Nx 23.2.1 orchestrates `nx build web` and `nx build api`; EF Core migrations are
 
 - [dotnet-freight](https://github.com/joshbarros/dotnet-freight): container space on ocean sailings.
 - [dotnet-ledger](https://github.com/joshbarros/dotnet-ledger): outgoing payments from an account balance.
+- [dotnet-warehouse](https://github.com/joshbarros/dotnet-warehouse): warehouse stock and outbound orders.
