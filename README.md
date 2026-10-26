@@ -222,3 +222,4 @@ Nx 23.2.1 orchestrates `nx build web` and `nx build api`; EF Core migrations are
 - [dotnet-ledger](https://github.com/joshbarros/dotnet-ledger): outgoing payments from an account balance.
 - [dotnet-warehouse](https://github.com/joshbarros/dotnet-warehouse): warehouse stock and outbound orders.
 - [dotnet-academy](https://github.com/joshbarros/dotnet-academy): course cohort seats and enrollments.
+- [dotnet-compute](https://github.com/joshbarros/dotnet-compute): GPU-hour reservations in a pool.
