@@ -17,10 +17,17 @@
         "production": {
           "outputHashing": "all",
           "budgets": [
-            { "type": "initial", "maximumWarning": "500kB", "maximumError": "1MB" }
+            {
+              "type": "initial",
+              "maximumWarning": "500kB",
+              "maximumError": "1MB"
+            }
           ]
         },
-        "development": { "optimization": false, "sourceMap": true }
+        "development": {
+          "optimization": false,
+          "sourceMap": true
+        }
       },
       "defaultConfiguration": "production"
     },
@@ -31,6 +38,18 @@
         "buildTarget": "web:build:development",
         "proxyConfig": "apps/web/proxy.conf.json",
         "port": 4291
+      }
+    },
+    "typecheck": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "tsc -p apps/web/tsconfig.app.json --noEmit"
+      }
+    },
+    "lint": {
+      "executor": "nx:run-commands",
+      "options": {
+        "command": "eslint \"apps/web/src/**/*.{ts,html}\" --max-warnings 0"
       }
     }
   }

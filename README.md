@@ -124,6 +124,7 @@ docker compose up -d --wait db kafka rabbitmq   # the brokers and Postgres, not 
 npx nx serve api                                # http://localhost:5211
 npx nx serve web                                # http://localhost:4291, proxies /api to the API
 WEB_URL=http://localhost:4291 npx playwright test   # the same browser specs, against the dev servers
+npx nx run-many -t typecheck lint -p web        # tsc --noEmit and ESLint (angular-eslint)
 npx nx build web && npx nx build api            # what CI builds
 ```
 
@@ -131,8 +132,8 @@ npx nx build web && npx nx build api            # what CI builds
 
 - **xUnit against real Postgres** (`tests/api`, 25 tests): two tasks with two `DbContext`s fight for one remaining slot (one `Held`, one `Short`, remaining 0, no hold for the loser); empty input, over-limit input, integer overflow (4294967297 must not wrap to 1), the fee, the poison substring; the same message delivered twice is claimed once; a release returns the slot once; the poison rejection is committed before the dead-letter; a cancellation followed by the late final mark leaves the appointment `Cancelled` and the letter `Issued`. The race test was run against a read-then-write version of the hold, where it failed, and against the conditional update, where it passes.
 - **`scripts/smoke.sh`** drives the composed stack with a run id on every code, so a kept volume does not collide: validation, the happy path (fee, letter, Kafka log), the last slot with three concurrent appointments (one confirmed, two short, no hold for the losers), the poison reference (rejected, `referrals.work.dlq` gains one message, slots restored), and a cancellation that lands between the letter and the final mark (appointment `Cancelled`, letter `Issued`, slots back, second cancellation `409`). To make that last window wide enough to hit on purpose, Compose sets `Appointments__FinalMarkDelayMs=1500`; it is a latency knob and defaults to 0.
-- **Playwright** (`e2e/specs/book-appointment.spec.ts`): opens a session in the UI, books a visit, sees `Confirmed` and the letter number, reloads to prove the page reads the API and keeps nothing in `localStorage`, then cancels and sees the slots come back. It runs against the composed web port, on a developer machine. A second spec, `e2e/specs/ui-flows.spec.ts`, drives the page through the refusal messages (over-limit, empty reference, duplicate), the poison rejection, the loser of a race for the last of the scarce number, and the Kafka event log panel. Both specs pass against the Compose stack and against the Nx dev servers.
-- **CI** (`.github/workflows/ci.yml`, on push): `npm ci`, Prettier check, `dotnet format whitespace --verify-no-changes`, `dotnet test` with a Postgres 17 service, and `nx build` for web and api. CI does not run the compose smoke or the Playwright spec.
+- **Playwright** (`e2e/specs/book-appointment.spec.ts`): opens a session in the UI, books a visit, sees `Confirmed` and the letter number, reloads to prove the page reads the API and keeps nothing in `localStorage`, then cancels and sees the slots come back. It runs against the composed web port. A second spec, `e2e/specs/ui-flows.spec.ts`, drives the page through the refusal messages (over-limit, empty reference, duplicate), the poison rejection, the loser of a race for the last of the scarce number, and the Kafka event log panel. Both specs pass against the Compose stack and against the Nx dev servers.
+- **CI** (`.github/workflows/ci.yml`, on push) has two jobs. `verify`: `npm ci`, Prettier check, `dotnet format whitespace --verify-no-changes`, `dotnet test` with a Postgres 17 service, `nx typecheck` and `nx lint` for web (ESLint with angular-eslint, template accessibility rules included, zero warnings allowed), and `nx build` for web and api. `e2e`: builds the Compose stack on the runner, runs `scripts/smoke.sh` and both Playwright specs against it, uploads the Playwright traces and prints the Compose logs on failure.
 
 ## Cloud mapping
 
@@ -200,7 +201,7 @@ open http://127.0.0.1:15701        # RabbitMQ management, platform / platform
 - `GET .../events` scans the whole topic for each call. Fine here, not something to expose at scale.
 - Lists are capped at 100 rows and not paginated.
 - Dead-lettered messages are not replayed automatically.
-- The browser spec and the compose smoke run on a developer machine; CI does not run them.
+- The browser specs drive Chromium at a desktop size only, and the `e2e` CI job needs Docker and takes a few minutes.
 
 ## Layout
 

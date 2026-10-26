@@ -18,7 +18,9 @@
     "format:api": "dotnet format whitespace Clinic.sln --no-restore",
     "format:api:check": "dotnet format whitespace Clinic.sln --no-restore --verify-no-changes",
     "smoke": "./scripts/smoke.sh",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "lint": "nx lint web",
+    "typecheck": "nx typecheck web"
   },
   "dependencies": {
     "@angular/common": "21.2.25",
@@ -37,11 +39,14 @@
     "@nx/workspace": "23.2.1",
     "@playwright/test": "^1.64.0",
     "@tailwindcss/postcss": "^4.1.0",
+    "angular-eslint": "21.4.0",
+    "eslint": "9.39.5",
     "nx": "23.2.1",
     "postcss": "^8.5.0",
     "prettier": "3.6.2",
     "tailwindcss": "^4.1.0",
-    "typescript": "5.9.3"
+    "typescript": "5.9.3",
+    "typescript-eslint": "8.72.0"
   },
   "overrides": {
     "piscina": "5.3.2",
