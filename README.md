@@ -92,16 +92,16 @@ Modules still talk only through messages: RabbitMQ carries the commands, Kafka k
 
 | Piece | How it works |
 | --- | --- |
-| Accounts | ASP.NET Core Identity. Passwords need 12+ characters with upper case, lower case and a digit, and 4 distinct characters. Five wrong passwords lock the account for 15 minutes (`429`). A wrong password and an unknown email give the same `401`. |
+| Accounts | ASP.NET Core Identity. Passwords need 10+ characters with upper case, lower case and a digit, and 4 distinct characters. Five wrong passwords lock the account for 15 minutes (`429`). A wrong password and an unknown email give the same `401`. |
 | Access token | JWT (HS256), 15 minutes, held **in memory** by the Angular app and sent as `Authorization: Bearer`. The signing key must be at least 32 bytes; the API refuses to start without one. |
 | Refresh token | 256 random bits in an `HttpOnly`, `SameSite=Strict`, `Path=/api/auth` cookie (`Secure` over HTTPS). Only its SHA-256 is stored. Every refresh **rotates** it with its conditional `UPDATE`, so two concurrent refreshes with the same token cannot both win. Presenting a token that was already used revokes the whole family. Refresh and logout also need an `X-Requested-With: clinic-web` header, so another site cannot trigger them. |
 | Roles | `Customer` (default at registration), `Staff`, `Admin`. An administrator is seeded from configuration on first start. |
-| Rules | Anonymous: `/api/health`, `/api/auth/*`. Any signed-in user: read sessions, book, read and cancel **their own** appointments and referrals. `Staff` and `Admin`: open sessions, read everything, read the event log. Another user's appointment or letter is `404`, not `403`, so ids do not leak. The owner of a appointment is the caller; a body field cannot set it. |
+| Rules | Anonymous: `/api/health`, `/api/auth/*`. Any signed-in user: read sessions, book, read and cancel **their own** appointments and referrals. `Staff` and `Admin`: open sessions, read everything, read the event log. Another user's appointment or letter is `404`, not `403`, so ids do not leak. The owner of an appointment is the caller; a body field cannot set it. |
 | Hardening | Rate limit on `/api/auth/*` per client (`RateLimit:AuthPerMinute`), security headers on every response (`nosniff`, `DENY`, strict CSP, `no-referrer`), a correlation id echoed in `X-Correlation-Id` and in every problem response, JSON logs (`Logging:Json`), forwarded headers only when `ForwardedHeaders:Enabled`, a fallback policy that makes every endpoint authenticated unless it opts out, and a readiness endpoint that checks every module schema. |
 
 ## Run it
 
-Needs Node 22 (npm 12), .NET SDK 12.0.401 (`global.json`), Docker (arm64 is fine) and python3 for the smoke script.
+Needs Node 22 (npm 10), .NET SDK 10.0.401 (`global.json`), Docker (arm64 is fine) and python3 for the smoke script.
 
 ```bash
 npm ci
@@ -121,10 +121,10 @@ docker compose down                   # keeps the Postgres volume; `down -v` dro
 | Web (nginx, proxies `/api/`) | 8091 |
 | API (`/scalar/v1`, `/api/health`) | 5211 |
 | Postgres 17 | 5471 |
-| Kafka 2.8.1 (KRaft, one broker) | 9121 |
-| RabbitMQ 2.13 / management UI (`platform` / `platform`) | 5701 / 15701 |
+| Kafka 3.8.1 (KRaft, one broker) | 9121 |
+| RabbitMQ 3.13 / management UI (`platform` / `platform`) | 5701 / 15701 |
 
-Inside the Compose network the API and nginx listen on 8080 and Kafka's internal listener is 1292.
+Inside the Compose network the API and nginx listen on 8080 and Kafka's internal listener is 9092.
 
 ## Try it with curl
 
@@ -135,26 +135,29 @@ API=http://127.0.0.1:5211
 login() { curl -s -X POST $API/api/auth/login -H 'content-type: application/json' -d "{\"email\":\"$1\",\"password\":\"$2\"}" | python3 -c 'import sys,json; print(json.load(sys.stdin)["accessToken"])'; }
 ADMIN="Authorization: Bearer $(login admin@clinic.local ClinicAdmin2026)"
 
-curl -s -X POST $API/api/sessions -H "$ADMIN" -H 'content-type: application/json' \
-  -d '{"code":"CARDIOLOGY-RTM-1","provider":"Dr. Silva","specialty":"Cardiology","location":"Rotterdam","capacitySlots":12}'
-
 curl -s -X POST $API/api/auth/register -H 'content-type: application/json' \
   -d '{"email":"ana@example.com","password":"Passw0rd-Demo1"}'      # 201; its accessToken goes in $ANA below
 ANA="Authorization: Bearer <accessToken>"
 
-curl -s -X POST $API/api/appointments -H "$ANA" -H 'content-type: application/json' \
-  -d '{"sessionCode":"CARDIOLOGY-RTM-1","reference":"PT-1001","slots":2}'
+curl -s -H "$ADMIN" -X POST $API/api/sessions \
+  -H 'content-type: application/json' \
+  -d '{"code":"SILVA-CARD-1","provider":"Dr. Silva","specialty":"Cardiology","location":"Clinic A","capacitySlots":12}'
+
+curl -s -H "$ANA" -X POST $API/api/appointments \
+  -H 'content-type: application/json' \
+  -d '{"sessionCode":"SILVA-CARD-1","reference":"PT-1001","slots":2}'
 # 202, status Requested. Use the returned id:
 
-curl -s -H "$ANA" $API/api/appointments/<id>             # Confirmed after a few seconds, with its referral letter number
+curl -s -H "$ANA" $API/api/appointments/<id>          # Confirmed after a few seconds, with a letter number
 curl -s -H "$ANA" $API/api/letters/<id>
-curl -s -H "$ANA" $API/api/sessions/CARDIOLOGY-RTM-1     # remainingSlots 10
-curl -s -H "$ADMIN" $API/api/appointments/<id>/events    # the Kafka log; staff only (a customer gets 403)
+curl -s -H "$ANA" $API/api/sessions/SILVA-CARD-1      # remainingSlots 10
+curl -s -H "$ADMIN" $API/api/appointments/<id>/events   # the Kafka log for this appointment
 
-curl -s -X POST -H "$ANA" $API/api/appointments/<id>/cancellation   # slots come back; the referral letter stays
+curl -s -H "$ANA" -X POST $API/api/appointments/<id>/cancellation \
+  -H 'content-type: application/json'                        # slots come back; the letter stays
 ```
 
-A appointment is validated at the door: reference required (at most 40 characters), slots from 1 to 4 slots. The fee is 12,000 cents per slot plus a 1,500 cent admin fee. The poison match is a case-sensitive substring: `PT-POISON-1` and any longer token containing `POISON` match.
+An appointment is validated at the door: patient reference required (at most 40 characters), 1 to 4 slots. The fee is 12,000 cents per slot plus a 1,500 cent admin fee. The poison match is a case-sensitive substring: `PT-POISON-7` and any longer token containing `POISON` match.
 
 ## Develop with Nx
 
@@ -163,7 +166,7 @@ The repository is an Nx workspace (`nx.json`, plugin `@nx/dotnet`). `npx nx show
 ```bash
 docker compose up -d --wait db kafka rabbitmq   # the brokers and Postgres, not the app
 npx nx serve api                                # http://localhost:5211 (Development: seeded admin, public docs)
-npx nx serve web                                # http://localhost:4291, proxies /api to the API
+npx nx serve web                                # http://localhost:4290, proxies /api to the API
 WEB_URL=http://localhost:4291 npx playwright test   # the same browser specs, against the dev servers
 npx nx run-many -t typecheck lint -p web        # tsc --noEmit and ESLint (angular-eslint)
 npx nx build web && npx nx build api            # what CI builds
@@ -171,7 +174,7 @@ npx nx build web && npx nx build api            # what CI builds
 
 ## What is tested, and where it runs
 
-- **Unit tests** (`tests/Clinic.UnitTests`, 110 tests, no Docker, about 2 seconds): the appointment rules and fee, the poison rule including integer overflow, token creation and validation, password and lockout behaviour of the auth service on an in-memory store, owner-or-staff access, the retry policy and topology, message serialization, the outbox `DbContext` conventions, and the HTTP middleware (problem details are `application/problem+json`, security headers, correlation ids).
+- **Unit tests** (`tests/Clinic.UnitTests`, 110 tests, no Docker, about 3 seconds): the appointment rules and fee, the poison rule including integer overflow, token creation and validation, password and lockout behaviour of the auth service on an in-memory store, owner-or-staff access, the retry policy and topology, message serialization, the outbox `DbContext` conventions, and the HTTP middleware (problem details are `application/problem+json`, security headers, correlation ids).
 - **Integration tests** (`tests/Clinic.IntegrationTests`, 48 tests, real Postgres): the slots race (two tasks, two `DbContext`s, one unit: one `Held`, one `Short`, no hold for the loser) and the check constraint behind it; the saga handlers against the real schema (duplicate delivery claimed once, a release returns the slot once, the poison rejection committed before the dead-letter, cancellation then late final mark); and the **whole HTTP pipeline** through `WebApplicationFactory`: register, login, wrong password, lockout, expired and tampered tokens, refresh rotation, replay revoking the family, two concurrent refreshes (exactly one wins), logout, the same-specialty header, the auth rate limit, and 401/403/404 for every route and ownership case. The race test was run against a read-then-write version of the hold, where it failed, and against the conditional update, where it passes.
 - **`scripts/smoke.sh`** drives the composed stack: authentication and ownership first (401, 403, 404), then validation, the happy path (fee, referral letter, Kafka log), the last slot with three concurrent appointments, the poison reference (rejected, `referrals.work.dlq` gains one message, slots restored), and a cancellation that lands between the referral letter and the final mark. To make that last window wide enough to hit on purpose, Compose sets `Appointments__FinalMarkDelayMs=1500`; it is a latency knob and defaults to 0.
 - **Playwright** (`e2e/specs`, 11 tests, Chromium): `auth.spec.ts` (anonymous sees only the form, wrong password, password policy, a customer books and sees only their own appointments with no staff controls, sign-out, the session surviving a reload through the cookie while `document.cookie` stays empty); `book-space.spec.ts` (open a session, book, referral letter, reload, cancel); `ui-flows.spec.ts` (refusal messages, the poison rejection, the loser of a race, the Kafka event log). They run against the composed web port and against the Nx dev servers.
@@ -201,7 +204,7 @@ JSON over HTTP. Everything except health and `/api/auth/register|login|refresh|l
 | `GET /api/auth/me` | The caller. | `200`, `401` |
 | `POST /api/sessions` | Opens a session with its starting count. Staff. | `201`, `400` invalid, `403`, `409` code exists |
 | `GET /api/sessions`, `GET /api/sessions/{code}` | Sessions with the live remaining count. | `200`, `404` |
-| `POST /api/appointments` | Accepts a appointment (1 to 4 slots) for the caller and starts the saga. | `202` Requested, `400` invalid, `404` unknown session, `409` duplicate reference |
+| `POST /api/appointments` | Accepts an appointment (1 to 4 slots) for the caller and starts the saga. | `202` Requested, `400` invalid, `404` unknown session, `409` duplicate reference |
 | `GET /api/appointments?sessionCode=` | The caller's latest 100 appointments (staff: everyone's), optionally for one session. | `200` |
 | `GET /api/appointments/{id}` | One appointment and its status. Owner or staff. | `200`, `404` |
 | `POST /api/appointments/{id}/cancellation` | Moves a held or confirmed appointment to its cancellation status and gives the slot back. The referral letter is not touched. Owner or staff. | `202`, `404`, `409` wrong status |
@@ -222,7 +225,7 @@ Compose sets these on the API container. Defaults in `apps/api/appsettings.json`
 | `Jwt__Key` | `${JWT_KEY}` or a demo key | HS256 signing key, at least 32 bytes. Required; startup fails without it. |
 | `Jwt__AccessMinutes` / `__RefreshDays` / `__SecureCookies` | `15` / `14` / `false` | Token lifetimes; set `SecureCookies` when TLS ends in front of the API. |
 | `Identity__SeedAdmin__Email` / `__Password` | `${ADMIN_EMAIL}` / `${ADMIN_PASSWORD}` | Administrator created on first start. |
-| `RateLimit__AuthPerMinute` | `120` (code default `4 slots`) | Requests a minute per client to `/api/auth/*`. |
+| `RateLimit__AuthPerMinute` | `120` (code default `20`) | Requests a minute per client to `/api/auth/*`. |
 | `ForwardedHeaders__Enabled` | `true` | Trust `X-Forwarded-*` from the reverse proxy (nginx here). Leave off when the API is reached directly. |
 | `Docs__Public` | `true` | Serve Scalar and OpenAPI without a token. |
 | `Logging__Json` | `true` | Structured JSON console logs. |
@@ -234,7 +237,7 @@ Compose sets these on the API container. Defaults in `apps/api/appsettings.json`
 ```bash
 docker compose ps                      # five services, all healthy
 docker compose logs -f api             # relay, consumers, poison and retry lines
-docker compose exec db psql -U clinic -d clinic -c 'select "RoutingKey","SentAt" from "OutboxMessages" order by "Id" desc limit 12'
+docker compose exec db psql -U clinic -d clinic -c 'select "RoutingKey","SentAt" from "OutboxMessages" order by "Id" desc limit 10'
 open http://127.0.0.1:15701        # RabbitMQ management, platform / platform
 ```
 
@@ -243,7 +246,7 @@ open http://127.0.0.1:15701        # RabbitMQ management, platform / platform
 - **`dotnet test` cannot connect**: start Postgres first with `docker compose up -d --wait db`.
 - **The smoke cannot reach the API**: run `docker compose up --build --wait` first; override the target with `API=... RABBIT=... ./scripts/smoke.sh`.
 - **Start clean**: `docker compose down -v` drops Postgres, Kafka and RabbitMQ data. Plain `down` keeps them, and the smoke is safe on kept data because every code carries a run id.
-- **The Kafka log looks empty right after a appointment**: the relay publishes within a second or so; reload the event log.
+- **The Kafka log looks empty right after an appointment**: the relay publishes within a second or so; reload the event log.
 
 ## Known limits
 
