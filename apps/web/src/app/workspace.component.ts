@@ -1,8 +1,8 @@
 import { Component, DestroyRef, OnInit, computed, inject, signal } from '@angular/core';
 import { DatePipe } from '@angular/common';
-import { ApiService } from '../core/api.service';
-import { AuthService } from '../core/auth.service';
-import { Appointment, AppointmentStatus, LogEntry, Session } from '../core/models';
+import { ApiService } from './core/api.service';
+import { AuthService } from './core/auth.service';
+import { Appointment, AppointmentStatus, LogEntry, Session } from './core/models';
 
 const BADGES: Record<AppointmentStatus, string> = {
   Requested: 'bg-slate-100 text-slate-700 ring-slate-300',
