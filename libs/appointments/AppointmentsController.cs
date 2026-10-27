@@ -19,10 +19,14 @@ public class AppointmentsController(AppointmentService service, KafkaLog kafka) 
         return Accepted($"/api/appointments/{appointment.Id}", AppointmentDto.From(appointment));
     }
 
-    /// <summary>Your appointments. Staff see everyone's.</summary>
+    /// <summary>Your appointments, newest first, a page at a time (default 100, at most 100). Staff see everyone's. The total is in X-Total-Count.</summary>
     [HttpGet]
-    public async Task<IEnumerable<AppointmentDto>> List([FromQuery] string? sessionCode, CancellationToken ct) =>
-        (await service.ListAsync(sessionCode, ct)).Select(AppointmentDto.From);
+    public async Task<IEnumerable<AppointmentDto>> List([FromQuery] string? sessionCode, [FromQuery] int page = 1, [FromQuery] int pageSize = 100, CancellationToken ct = default)
+    {
+        var (items, total) = await service.ListAsync(sessionCode, Math.Max(page, 1), Math.Clamp(pageSize, 1, 100), ct);
+        Response.Headers["X-Total-Count"] = total.ToString();
+        return items.Select(AppointmentDto.From);
+    }
 
     [HttpGet("{id:guid}")]
     public async Task<AppointmentDto> Get(Guid id, CancellationToken ct) => AppointmentDto.From(await service.GetAsync(id, ct));

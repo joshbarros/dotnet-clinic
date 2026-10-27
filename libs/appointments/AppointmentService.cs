@@ -63,7 +63,7 @@ public class AppointmentService(AppointmentsDbContext db, ISessionCatalog sessio
         return appointment;
     }
 
-    public async Task<List<Appointment>> ListAsync(string? sessionCode, CancellationToken ct)
+    public async Task<(List<Appointment> Items, int Total)> ListAsync(string? sessionCode, int page, int pageSize, CancellationToken ct)
     {
         var query = db.Appointments.AsNoTracking();
         if (!user.IsStaff)
@@ -73,7 +73,9 @@ public class AppointmentService(AppointmentsDbContext db, ISessionCatalog sessio
         }
         if (!string.IsNullOrWhiteSpace(sessionCode))
             query = query.Where(b => b.SessionCode == sessionCode);
-        return await query.OrderByDescending(b => b.CreatedAt).Take(100).ToListAsync(ct);
+        var total = await query.CountAsync(ct);
+        var items = await query.OrderByDescending(b => b.CreatedAt).Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(ct);
+        return (items, total);
     }
 
     /// <summary>Moves Held or Issued to Cancelled and asks Scheduling to give the slot back. The referral letter is not touched.</summary>
